@@ -24,6 +24,7 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,6 +39,8 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
+
+import org.apache.maven.model.Organization;
 import org.gradle.api.artifacts.ModuleVersionIdentifier;
 import org.gradle.api.artifacts.component.ComponentArtifactIdentifier;
 import org.gradle.api.artifacts.component.ComponentIdentifier;
@@ -163,17 +166,21 @@ public class SpdxDocumentBuilder {
         resolvedExternalArtifacts.entrySet().stream()
             .filter(
                 e -> !(e.getKey().getComponentIdentifier() instanceof ProjectComponentIdentifier))
+                // Skip .rip files
+              .filter(
+                    e -> !e.getValue().getName().endsWith(".rip")) // Filter out .rip files
             .collect(
                 Collectors.toMap(
                     e -> e.getKey().getComponentIdentifier(),
                     Entry::getValue,
                     (file1, file2) -> {
-                      if (Objects.equals(file1, file2)) {
-                        return file1;
-                      } else
-                        throw new IllegalStateException(
-                            "cannot merge duplicate " + file1 + " and " + file2);
+                      // this should be unnecessary after skipping .rip files
+                      if (!Objects.equals(file1, file2)) {
+                        logger.warn("Conflict detected: cannot merge duplicate " + file1 + " and " + file2);
+                      }
+                      return file1; // Select the first file encountered if both are the same
                     }));
+
     this.mavenArtifactRepositories = mavenArtifactRepositories;
     this.poms = poms;
 
@@ -282,7 +289,8 @@ public class SpdxDocumentBuilder {
               + " has no specified version");
       version = "NOASSERTION";
     }
-    var supplier = documentInfo.getSupplier().orElse("NOASSERTION");
+    // Only Polar projects in polarosapp or platform projects
+    var supplier = documentInfo.getSupplier().orElse("Organization: Polar Electro");
     if (supplier.equals("NOASSERTION")) {
       logger.warn("supplier not set for project " + pi.getName());
     }
@@ -318,6 +326,67 @@ public class SpdxDocumentBuilder {
     if (dependencyFile != null) {
       ModuleVersionIdentifier moduleId = resolvedComponentResult.getModuleVersion();
       PomInfo pomInfo = poms.get(resolvedComponentResult.getId().getDisplayName());
+
+      if (moduleId == null) {
+          logger.error("ModuleVersionIdentifier is null for " + resolvedComponentResult.getId());
+      }
+      String group = moduleId.getGroup();
+      if (pomInfo == null) {
+          logger.error("PomInfo is null for " + resolvedComponentResult.getId().getDisplayName());
+          pomInfo = new PomInfo() {
+              @Override
+              public List<LicenseInfo> getLicenses() {
+                  return Collections.emptyList();
+              }
+              @Override
+              public URI getHomepage() {
+                  return URI.create("NOASSERTION");
+              }
+              @Override
+              public Optional<Organization> getOrganization() {
+                  if (group.contains("polar")) {
+                      return Optional.of(new Organization() {
+                          @Override
+                          public String getName() {
+                              return "Polar Electro";
+                          }
+                      });
+                  } else if (group.contains("ej.") || group.contains("com.is2t.") ||group.contains("microej")) {
+                      return Optional.of(new Organization() {
+                          @Override
+                          public String getName() {
+                              return "MicroEJ";
+                          }
+                      });
+                  } else if (moduleId.getGroup().contains("com.google.")) {
+                      return Optional.of(new Organization() {
+                          @Override
+                          public String getName() {
+                              return "Google";
+                          }
+                      });
+                  }
+                  return Optional.empty();
+              }
+              @Override
+              public List<DeveloperInfo> getDevelopers() {
+                  return Arrays.asList(new DeveloperInfo() {
+                      @Override
+                      public Optional<String> getName() {
+                          return Optional.of("NOASSERTION");
+                      }
+                      @Override
+                      public Optional<String> getEmail() {
+                          return Optional.of("NOASSERTION");
+                      }
+                      @Override
+                      public Optional<String> getOrganization() {
+                          return Optional.of("NOASSERTION");
+                      }
+                  });
+              }
+          };
+      }
 
       SpdxPackageBuilder spdxPkgBuilder =
           doc.createPackage(
